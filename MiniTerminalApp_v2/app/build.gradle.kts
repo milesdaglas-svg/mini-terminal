@@ -10,7 +10,13 @@ android {
     defaultConfig {
         applicationId = "com.example.miniterminal"
         minSdk = 26
-        targetSdk = 34
+        // Deliberately below 29: Android 10+ blocks execve() of any binary
+        // downloaded post-install (proot, and everything inside the Alpine
+        // rootfs) for apps targeting API 29+ — a real W^X security policy,
+        // not a bug. Termux itself relies on exactly this to function.
+        // Confirmed directly by Termux maintainers: see
+        // https://github.com/termux/termux-app/discussions/3372
+        targetSdk = 28
         versionCode = 1
         versionName = "1.0"
     }

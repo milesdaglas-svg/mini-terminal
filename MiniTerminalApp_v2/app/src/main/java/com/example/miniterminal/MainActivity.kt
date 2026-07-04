@@ -59,6 +59,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        installCrashHandler()
+
         if (ProotSetup.isReady(this)) {
             currentDir = ProotSetup.homeDir(this)
             startProotShell()
@@ -69,6 +71,35 @@ class MainActivity : AppCompatActivity() {
                 "[toybox shell — basic commands only]\n" +
                 "[type 'setup' to download a real Linux environment (bash, apk, python) — one-time ~40-80MB]\n"
             )
+        }
+
+        showLastCrashIfAny()
+    }
+
+    /** Since there's no adb/Android Studio in this workflow, write crashes to a
+     *  plain file so they can be read directly in the terminal on next launch. */
+    private fun installCrashHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val crashFile = File(filesDir, "last_crash.txt")
+                crashFile.writeText(
+                    "Crashed at: ${java.util.Date()}\n" +
+                    "Thread: ${thread.name}\n\n" +
+                    android.util.Log.getStackTraceString(throwable)
+                )
+            } catch (ignored: Exception) {}
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun showLastCrashIfAny() {
+        val crashFile = File(filesDir, "last_crash.txt")
+        if (crashFile.exists()) {
+            appendOutput("\n===== APP CRASHED LAST TIME — details below =====\n")
+            appendOutput(crashFile.readText())
+            appendOutput("===== end of crash report =====\n\n")
+            crashFile.delete()
         }
     }
 
@@ -98,7 +129,24 @@ class MainActivity : AppCompatActivity() {
             shellWriter = OutputStreamWriter(shellProcess!!.outputStream)
             usingProot = true
             startReaderThread()
-            appendOutput("[Alpine Linux shell ready — try: apk add python3]\n")
+
+            // Give proot a moment to either settle in or die, and report which.
+            Thread {
+                Thread.sleep(800)
+                val proc = shellProcess
+                if (proc != null && !proc.isAlive) {
+                    val code = proc.exitValue()
+                    runOnUiThread {
+                        appendOutput(
+                            "[proot exited immediately with code $code — it did not start correctly]\n" +
+                            "[this usually means either an Android OS restriction blocked running the " +
+                            "downloaded binary, or (on Android 15+) a kernel seccomp restriction broke proot]\n"
+                        )
+                    }
+                } else {
+                    runOnUiThread { appendOutput("[Alpine Linux shell ready — try: apk add python3]\n") }
+                }
+            }.start()
         } catch (e: Exception) {
             appendOutput("[failed to start proot shell: ${e.message}]\n")
         }
@@ -136,10 +184,25 @@ class MainActivity : AppCompatActivity() {
         when {
             tokens.isEmpty() -> return
             tokens[0] == "setup" -> runSetup()
+            tokens[0] == "reset" -> runReset()
             tokens[0] == "git" && !usingProot -> runGit(tokens.drop(1))
             tokens[0] == "cd" && !usingProot -> runCd(tokens.drop(1), cmd)
             else -> forwardToShell(cmd)
         }
+    }
+
+    /** Wipes a broken proot/Alpine install so 'setup' can start clean. */
+    private fun runReset() {
+        running = false
+        shellProcess?.destroy()
+        running = true
+
+        val wiped = ProotSetup.rootfsDir(this).deleteRecursively()
+        appendOutput(if (wiped) "Alpine environment wiped.\n" else "Nothing to wipe, or some files couldn't be deleted.\n")
+
+        currentDir = filesDir
+        startToyboxShell()
+        appendOutput("[back to toybox shell — type 'setup' to try again]\n")
     }
 
     private fun runSetup() {

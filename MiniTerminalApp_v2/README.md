@@ -168,3 +168,19 @@ apk add git bash
   `setup` is run.
 - Uninstalling the app deletes the downloaded Alpine environment — `setup`
   will need to run again after a reinstall.
+
+## Fixed: "error=13, Permission denied" running proot
+
+If you saw this error, it's a well-documented Android 10+ restriction:
+apps targeting API 29+ cannot execute binaries downloaded after install
+(a W^X security policy) — confirmed directly by Termux's own maintainers
+as the reason Termux itself must target API 28 or lower to function:
+https://github.com/termux/termux-app/discussions/3372
+
+Fixed by setting `targetSdk = 28` in `app/build.gradle.kts`. This is not
+a hack — it's the same real mechanism Termux relies on. `compileSdk`
+stays at 34, so this doesn't affect which Android APIs the code can use.
+
+**If you already ran `setup` on an older build:** the downloaded files
+are still fine, but run `reset` then `setup` again after installing this
+updated APK, just to test cleanly from scratch.

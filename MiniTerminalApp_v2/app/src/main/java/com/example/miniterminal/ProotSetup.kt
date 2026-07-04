@@ -9,28 +9,30 @@ import java.net.HttpURLConnection
 import java.net.URI
 
 /**
- * Downloads a real proot binary + a minimal Alpine Linux rootfs on first
- * use, so the terminal can run a genuine Linux environment (bash, apk
- * install, python, real git, etc) instead of just Android's built-in
- * toybox shell.
+ * Sets up a real Alpine Linux environment via proot, giving genuine
+ * bash/apk/python/git instead of just Android's built-in toybox shell.
  *
- * proot binaries: https://github.com/skirsten/proot-portable-android-binaries
- * (prebuilt, based on Termux's own proot package — no cross-compiling needed).
- * Alpine rootfs: official Alpine CDN, looked up dynamically so this doesn't
- * go stale when Alpine ships a new release.
+ * proot itself (tiny, ~800KB) is bundled INTO THE APK as a native library
+ * at build time (see .github/workflows/build.yml, which downloads the
+ * right binary per architecture from
+ * https://github.com/skirsten/proot-portable-android-binaries into
+ * jniLibs/ before Gradle runs). This is not optional — Android denies
+ * execute permission to binaries downloaded into normal app storage at
+ * runtime on many devices ("Permission denied", errno 13), which is
+ * exactly what the first version of this app hit. Bundling as a native
+ * library is the standard, working fix (it's how Termux itself does it).
  *
- * Honest caveats, read before relying on this:
- * - Verified to work well on Android <= 14. On Android 15+, some devices'
- *   tightened seccomp filters are known to break proot outright for
- *   certain syscalls — this is a real, currently open issue in the wider
- *   proot ecosystem as of mid-2026, not something specific to this app,
- *   and there is no simple fix at time of writing.
- * - Downloads roughly 40-80MB total the first time "setup" is run. This
- *   is a one-time cost per install, cached afterward.
+ * Only the Alpine rootfs (~40-80MB of data files, not executables Android
+ * needs to directly exec) is downloaded at runtime, looked up dynamically
+ * against Alpine's official CDN so it won't go stale as new versions ship.
+ *
+ * Honest caveat: verified to work well on Android <= 14. On Android 15+,
+ * some devices' tightened seccomp filters are known to break proot outright
+ * for certain syscalls — a real, currently open issue in the wider proot
+ * ecosystem as of mid-2026, not something specific to this app.
  */
 object ProotSetup {
 
-    private const val PROOT_BASE_URL = "https://skirsten.github.io/proot-portable-android-binaries"
     private const val ALPINE_INDEX_URL_TEMPLATE =
         "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/%s/"
 
@@ -43,8 +45,17 @@ object ProotSetup {
     }
 
     fun rootfsDir(context: Context) = File(context.filesDir, "alpine")
-    fun prootDir(context: Context) = File(context.filesDir, "proot")
-    fun prootBinary(context: Context) = File(prootDir(context), "proot")
+
+    /**
+     * proot is bundled inside the APK as a native library (jniLibs/<abi>/libproot.so),
+     * NOT downloaded at runtime. Android only grants execute permission to files that
+     * ship inside the APK this way — a binary downloaded into normal app storage at
+     * runtime gets "Permission denied" on many devices, which is exactly what plain
+     * runtime-downloaded proot hit. applicationInfo.nativeLibraryDir is guaranteed
+     * executable by the OS on every device, which is what fixes this for good.
+     */
+    fun prootBinary(context: Context) = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+
     fun tmpDir(context: Context) = File(context.cacheDir, "proot-tmp").apply { mkdirs() }
     fun homeDir(context: Context) = File(rootfsDir(context), "root").apply { mkdirs() }
 
@@ -61,14 +72,14 @@ object ProotSetup {
         onProgress("Detected architecture: $abi\n")
 
         if (!prootBinary(context).exists()) {
-            onProgress("Downloading proot binary...\n")
-            prootDir(context).mkdirs()
-            downloadFile("$PROOT_BASE_URL/$abi/proot", prootBinary(context))
-            prootBinary(context).setExecutable(true, false)
-            onProgress("proot ready (${prootBinary(context).length() / 1024} KB)\n")
-        } else {
-            onProgress("proot binary already installed, skipping.\n")
+            onProgress(
+                "[error] proot native library not found at ${prootBinary(context).absolutePath}\n" +
+                "This means the APK was built without the jniLibs/$abi/libproot.so bundled in — " +
+                "check the GitHub Actions build log for the 'Download proot binaries' step.\n"
+            )
+            return
         }
+        onProgress("proot found (bundled in APK, ${prootBinary(context).length() / 1024} KB)\n")
 
         if (!File(rootfsDir(context), "bin").exists()) {
             onProgress("Looking up the current Alpine release for $abi...\n")
