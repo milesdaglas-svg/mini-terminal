@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.miniterminal"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -50,4 +50,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     // Pure-Java git implementation — no native binary, no bootstrap download.
     implementation("org.eclipse.jgit:org.eclipse.jgit:6.9.0.202403050737-r")
+    // Pure-Java tar.gz extraction, needed to unpack the Alpine rootfs.
+    implementation("org.apache.commons:commons-compress:1.26.0")
 }

@@ -14,14 +14,13 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
 /**
- * Mini Terminal — a persistent /system/bin/sh session on-device, plus a
- * lightweight `git` (via JGit, pure Java — no native binary) layered on
- * top for clone/status/add/commit/pull/push.
+ * Mini Terminal — starts on Android's built-in toybox shell. Typing
+ * "setup" downloads a real proot + Alpine Linux environment (one-time,
+ * ~40-80MB) and switches to it, giving real bash/apk/python — not just
+ * toybox commands. `git` is handled separately via JGit either way.
  *
- * Honest limitation: Android's built-in shell only has toybox commands
- * (ls, cd, cat, echo, ps, etc) — no bash, no python, no apt. `git` is
- * specifically handled separately via JGit since Android has no native
- * git binary at all.
+ * See ProotSetup.kt for the honest Android-version caveats before relying
+ * on this for anything important.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -33,9 +32,8 @@ class MainActivity : AppCompatActivity() {
     private var shellWriter: OutputStreamWriter? = null
     private var readerThread: Thread? = null
     @Volatile private var running = true
+    @Volatile private var usingProot = false
 
-    // Mirrors the shell's working directory so `git` commands (which
-    // don't go through the real shell) operate in the right folder.
     private lateinit var currentDir: File
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,44 +59,71 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // App-private storage — writable with no special permissions needed.
-        currentDir = filesDir
-        startShell()
+        if (ProotSetup.isReady(this)) {
+            currentDir = ProotSetup.homeDir(this)
+            startProotShell()
+        } else {
+            currentDir = filesDir
+            startToyboxShell()
+            appendOutput(
+                "[toybox shell — basic commands only]\n" +
+                "[type 'setup' to download a real Linux environment (bash, apk, python) — one-time ~40-80MB]\n"
+            )
+        }
     }
 
-    private fun startShell() {
+    // ---------- shell startup (two modes) ----------
+
+    private fun startToyboxShell() {
         try {
             val pb = ProcessBuilder("/system/bin/sh")
             pb.redirectErrorStream(true)
             pb.directory(currentDir)
             shellProcess = pb.start()
-
             shellWriter = OutputStreamWriter(shellProcess!!.outputStream)
-
-            readerThread = Thread {
-                try {
-                    val reader = BufferedReader(InputStreamReader(shellProcess!!.inputStream))
-                    val buffer = CharArray(1024)
-                    while (running) {
-                        val read = reader.read(buffer)
-                        if (read == -1) break
-                        val chunk = String(buffer, 0, read)
-                        runOnUiThread { appendOutput(chunk) }
-                    }
-                } catch (e: IOException) {
-                    if (running) {
-                        runOnUiThread { appendOutput("\n[shell stream closed: ${e.message}]\n") }
-                    }
-                }
-            }
-            readerThread!!.isDaemon = true
-            readerThread!!.start()
-
-            appendOutput("[shell session started in ${currentDir.absolutePath}]\n")
+            usingProot = false
+            startReaderThread()
         } catch (e: Exception) {
             appendOutput("[failed to start shell: ${e.message}]\n")
         }
     }
+
+    private fun startProotShell() {
+        try {
+            val cmd = ProotSetup.buildLaunchCommand(this)
+            val pb = ProcessBuilder(cmd)
+            pb.redirectErrorStream(true)
+            pb.environment().putAll(ProotSetup.launchEnv(this))
+            shellProcess = pb.start()
+            shellWriter = OutputStreamWriter(shellProcess!!.outputStream)
+            usingProot = true
+            startReaderThread()
+            appendOutput("[Alpine Linux shell ready — try: apk add python3]\n")
+        } catch (e: Exception) {
+            appendOutput("[failed to start proot shell: ${e.message}]\n")
+        }
+    }
+
+    private fun startReaderThread() {
+        readerThread = Thread {
+            try {
+                val reader = BufferedReader(InputStreamReader(shellProcess!!.inputStream))
+                val buffer = CharArray(1024)
+                while (running) {
+                    val read = reader.read(buffer)
+                    if (read == -1) break
+                    val chunk = String(buffer, 0, read)
+                    runOnUiThread { appendOutput(chunk) }
+                }
+            } catch (e: IOException) {
+                if (running) runOnUiThread { appendOutput("\n[shell stream closed: ${e.message}]\n") }
+            }
+        }
+        readerThread!!.isDaemon = true
+        readerThread!!.start()
+    }
+
+    // ---------- command routing ----------
 
     private fun sendCommand() {
         val cmd = commandInput.text.toString()
@@ -110,10 +135,35 @@ class MainActivity : AppCompatActivity() {
         val tokens = tokenize(cmd)
         when {
             tokens.isEmpty() -> return
-            tokens[0] == "git" -> runGit(tokens.drop(1))
-            tokens[0] == "cd" -> runCd(tokens.drop(1), cmd)
+            tokens[0] == "setup" -> runSetup()
+            tokens[0] == "git" && !usingProot -> runGit(tokens.drop(1))
+            tokens[0] == "cd" && !usingProot -> runCd(tokens.drop(1), cmd)
             else -> forwardToShell(cmd)
         }
+    }
+
+    private fun runSetup() {
+        if (ProotSetup.isReady(this)) {
+            appendOutput("Already set up — Alpine Linux is active.\n")
+            return
+        }
+        appendOutput("Starting setup, this needs internet and can take a few minutes...\n")
+        Thread {
+            try {
+                ProotSetup.performSetup(this) { line ->
+                    runOnUiThread { appendOutput(line) }
+                }
+                runOnUiThread {
+                    running = false
+                    shellProcess?.destroy()
+                    running = true
+                    currentDir = ProotSetup.homeDir(this)
+                    startProotShell()
+                }
+            } catch (e: Exception) {
+                runOnUiThread { appendOutput("[setup failed: ${e.message}]\n") }
+            }
+        }.start()
     }
 
     /** git runs off the main thread since clone/pull/push do real network I/O. */
@@ -125,7 +175,7 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    /** Tracks our own cwd mirror, and still forwards to the shell so ls/pwd/etc stay in sync. */
+    /** Only used in toybox mode — proot mode tracks cwd inside its own persistent shell naturally. */
     private fun runCd(args: List<String>, rawCmd: String) {
         val target = if (args.isEmpty()) filesDir else File(args[0])
         val resolved = if (target.isAbsolute) target else File(currentDir, args[0])
@@ -135,7 +185,6 @@ class MainActivity : AppCompatActivity() {
             appendOutput("cd: no such directory: ${args.getOrElse(0) { "" }}\n")
             return
         }
-
         currentDir = normalized
         forwardToShell(rawCmd)
     }
@@ -149,7 +198,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Simple tokenizer that respects "double" and 'single' quoted args, e.g. git commit -m "message here". */
     private fun tokenize(s: String): List<String> {
         val regex = Regex("\"([^\"]*)\"|'([^']*)'|(\\S+)")
         return regex.findAll(s).map { m ->

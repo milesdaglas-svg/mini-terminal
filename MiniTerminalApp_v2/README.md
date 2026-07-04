@@ -129,3 +129,42 @@ the code directly from that.
 — every push re-triggers the build automatically. You can also trigger
 it manually from the Actions tab (the `workflow_dispatch` trigger) without
 pushing anything, if you just want to rebuild the same code.
+
+## New: real Linux via proot + Alpine (Option B)
+
+Type `setup` in the terminal to download and switch into a real Linux
+environment — genuine `bash`, `apk install <anything>`, `python3`, real
+`git`, etc — not just Android's built-in toybox shell.
+
+**How it works:**
+- Downloads a prebuilt `proot` binary for your phone's CPU architecture
+  from [skirsten/proot-portable-android-binaries](https://github.com/skirsten/proot-portable-android-binaries)
+  (based on Termux's own proot package — no cross-compiling needed)
+- Looks up and downloads the current Alpine Linux minirootfs from Alpine's
+  official CDN (looked up dynamically, so it won't go stale as Alpine
+  ships new versions)
+- One-time download, roughly 40-80MB total, cached after that
+- Once set up, every command goes to a real Alpine shell instead of toybox
+
+**Try after running `setup`:**
+```
+apk add python3
+python3 --version
+apk add git bash
+```
+
+### Important, honest caveats
+
+- **Verified to work well on Android 14 and earlier.** On **Android 15+**,
+  some devices' tightened seccomp security filters are known to break
+  proot outright for certain syscalls (`Bad system call (SIGSYS)` errors)
+  — this is a real, currently open issue across the whole proot ecosystem
+  as of mid-2026, not something specific to this app, and there's no
+  simple universal fix yet.
+- Once Alpine is active, `git` commands go to the **real git binary**
+  (install it with `apk add git` first) rather than the JGit fallback,
+  since JGit can't track the working directory of the live persistent
+  shell the way a real forwarded command can. JGit is only used before
+  `setup` is run.
+- Uninstalling the app deletes the downloaded Alpine environment — `setup`
+  will need to run again after a reinstall.
