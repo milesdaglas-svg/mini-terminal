@@ -1,0 +1,6 @@
+<resources>
+    <color name="terminal_bg">#0D1117</color>
+    <color name="terminal_text">#39FF88</color>
+    <color name="terminal_prompt">#58A6FF</color>
+    <color name="input_bg">#161B22</color>
+</resources>

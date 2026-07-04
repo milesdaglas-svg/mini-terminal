@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.MiniTerminal" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/terminal_bg</item>
+        <item name="colorPrimary">@color/terminal_bg</item>
+        <item name="colorPrimaryDark">@color/terminal_bg</item>
+    </style>
+</resources>
