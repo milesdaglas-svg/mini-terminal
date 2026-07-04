@@ -31,11 +31,17 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Find project and build APK
+        run: |
+          PROJECT_DIR=$(find . -maxdepth 5 -name "settings.gradle.kts" -exec dirname {} \; | head -n 1)
+          echo "Building project found at: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --stacktrace
+          mkdir -p "$GITHUB_WORKSPACE/apk_output"
+          find . -name "app-debug.apk" -exec cp {} "$GITHUB_WORKSPACE/apk_output/" \;
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: mini-terminal-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: apk_output/app-debug.apk
